@@ -13,6 +13,8 @@ else
     RECORDING_DIR="$HOME/Videos" # Use default path
 fi
 
+echo "Recording directory: $RECORDING_DIR"
+
 getdate() {
     date '+%Y-%m-%d_%H.%M.%S'
 }
@@ -47,15 +49,56 @@ for ((i=0;i<${#ARGS[@]};i++)); do
 done
 
 if pgrep wf-recorder > /dev/null; then
+    # STOP RECORDING
     notify-send "Recording Stopped" "Stopped" -a 'Recorder' &
-    pkill wf-recorder &
+    
+    # Send SIGINT (like Ctrl+C) for graceful stop - wf-recorder expects this
+    pkill -INT wf-recorder
+
+    # give wf-recorder a moment to flush/close the file
+    sleep 2
+
+    # If still running, force kill
+    if pgrep wf-recorder > /dev/null; then
+        pkill -9 wf-recorder
+        sleep 0.5
+    fi
+
+    # find the most recent recording file
+    latest_file=$(ls -1t recording_*.mp4 2>/dev/null | head -n 1)
+
+    if [[ -n "$latest_file" ]]; then
+        output="${latest_file%.mp4}_min.mp4"
+        notify-send "Compressing recording" "$latest_file → $output" -a 'Recorder' & disown
+
+        # run ffmpeg in the background
+        ffmpeg -i "$latest_file" \
+            -c:v libx264 -preset slow -crf 18 \
+            -c:a aac -b:a 128k \
+            "$output" \
+            >/dev/null 2>&1 &
+    fi
 else
+    # START RECORDING
+    FILENAME="recording_$(getdate).mp4"
+
     if [[ $FULLSCREEN_FLAG -eq 1 ]]; then
-        notify-send "Starting recording" 'recording_'"$(getdate)"'.mp4' -a 'Recorder' & disown
+        notify-send "Starting recording" "$FILENAME" -a 'Recorder' & disown
         if [[ $SOUND_FLAG -eq 1 ]]; then
-            wf-recorder -o "$(getactivemonitor)" --pixel-format yuv420p -f './recording_'"$(getdate)"'.mp4' -t --audio="$(getaudiooutput)"
+            wf-recorder \
+                -o "$(getactivemonitor)" \
+                -c h264_vaapi -d /dev/dri/renderD128 \
+                -b 0 \
+                -f "./$FILENAME" \
+                -t \
+                --audio="$(getaudiooutput)"
         else
-            wf-recorder -o "$(getactivemonitor)" --pixel-format yuv420p -f './recording_'"$(getdate)"'.mp4' -t
+            wf-recorder \
+                -o "$(getactivemonitor)" \
+                -c h264_vaapi -d /dev/dri/renderD128 \
+                -b 0 \
+                -f "./$FILENAME" \
+                -t
         fi
     else
         # If a manual region was provided via --region, use it; otherwise run slurp as before.
@@ -68,11 +111,22 @@ else
             fi
         fi
 
-        notify-send "Starting recording" 'recording_'"$(getdate)"'.mp4' -a 'Recorder' & disown
+        notify-send "Starting recording" "$FILENAME" -a 'Recorder' & disown
         if [[ $SOUND_FLAG -eq 1 ]]; then
-            wf-recorder --pixel-format yuv420p -f './recording_'"$(getdate)"'.mp4' -t --geometry "$region" --audio="$(getaudiooutput)"
+            wf-recorder \
+                -c h264_vaapi -d /dev/dri/renderD128 \
+                -b 0 \
+                -f "./$FILENAME" \
+                -t \
+                --geometry "$region" \
+                --audio="$(getaudiooutput)"
         else
-            wf-recorder --pixel-format yuv420p -f './recording_'"$(getdate)"'.mp4' -t --geometry "$region"
+            wf-recorder \
+                -c h264_vaapi -d /dev/dri/renderD128 \
+                -b 0 \
+                -f "./$FILENAME" \
+                -t \
+                --geometry "$region"
         fi
     fi
 fi
